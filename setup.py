@@ -8,7 +8,7 @@ with open(os.path.join(CURRENT_DIR, 'README.md'), 'r') as f:
 
 setup(
     name='fastenum',
-    version='0.0.1',
+    version='0.1.0',
     description='Patch for builtin enum module to achieve best performance',
     long_description=README,
     author='MrMrRobat',

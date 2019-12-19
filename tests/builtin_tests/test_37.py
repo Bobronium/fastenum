@@ -1,14 +1,17 @@
+import enum
 import inspect
 import pydoc
 import unittest
 from collections import OrderedDict
 from datetime import timedelta
+from enum import Enum, IntEnum, EnumMeta, Flag, IntFlag, unique, auto
 from io import StringIO
 from pickle import dumps, loads, PicklingError, HIGHEST_PROTOCOL
 from test import support
 
 import fastenum
-from fastenum import Enum, IntEnum, EnumMeta, Flag, IntFlag, unique, auto
+
+assert fastenum.enabled
 
 try:
     import threading
@@ -677,7 +680,7 @@ class TestEnum(unittest.TestCase):
             ONE = 1
             TWO = 2
 
-        ReplaceGlobalInt.__reduce_ex__ = fastenum.enum._reduce_ex_by_name
+        ReplaceGlobalInt.__reduce_ex__ = enum._reduce_ex_by_name
         for proto in range(HIGHEST_PROTOCOL):
             self.assertEqual(ReplaceGlobalInt.TWO.__reduce_ex__(proto), 'TWO')
 
@@ -686,7 +689,7 @@ class TestEnum(unittest.TestCase):
             'BadPickle', 'dill sweet bread-n-butter', module=__name__)
         globals()['BadPickle'] = BadPickle
         # now break BadPickle to test1 exception raising
-        fastenum.enum._make_class_unpicklable(BadPickle)
+        enum._make_class_unpicklable(BadPickle)
         test_pickle_exception(self.assertRaises, TypeError, BadPickle.dill)
         test_pickle_exception(self.assertRaises, PicklingError, BadPickle)
 
@@ -2675,21 +2678,21 @@ class TestIntFlag(unittest.TestCase):
             self.assertIs(type(e), Perm)
 
     def test_programatic_function_from_empty_list(self):
-        Perm = fastenum.IntFlag('Perm', [])
+        Perm = enum.IntFlag('Perm', [])
         lst = list(Perm)
         self.assertEqual(len(lst), len(Perm))
         self.assertEqual(len(Perm), 0, Perm)
-        Thing = fastenum.Enum('Thing', [])
+        Thing = enum.Enum('Thing', [])
         lst = list(Thing)
         self.assertEqual(len(lst), len(Thing))
         self.assertEqual(len(Thing), 0, Thing)
 
     def test_programatic_function_from_empty_tuple(self):
-        Perm = fastenum.IntFlag('Perm', ())
+        Perm = enum.IntFlag('Perm', ())
         lst = list(Perm)
         self.assertEqual(len(lst), len(Perm))
         self.assertEqual(len(Perm), 0, Perm)
-        Thing = fastenum.Enum('Thing', ())
+        Thing = enum.Enum('Thing', ())
         self.assertEqual(len(lst), len(Thing))
         self.assertEqual(len(Thing), 0, Thing)
 
@@ -2901,14 +2904,13 @@ class TestUnique(unittest.TestCase):
 expected_help_output_with_docs = """\
 Help on class Color in module %s:
 
-class Color(fastenum.Enum)
+class Color(enum.Enum)
  |  Color(value, names=None, *, module=None, qualname=None, type=None, start=1)
  |\x20\x20
  |  An enumeration.
  |\x20\x20
  |  Method resolution order:
  |      Color
- |      fastenum.Enum
  |      enum.Enum
  |      builtins.object
  |\x20\x20
@@ -3013,7 +3015,7 @@ class TestStdLib(unittest.TestCase):
             Attribute(name='__doc__', kind='data',
                       defining_class=self.Color, object='An enumeration.'),
             Attribute(name='__members__', kind='property',
-                      defining_class=fastenum.BuiltinEnumMeta, object=EnumMeta.__members__),
+                      defining_class=EnumMeta, object=EnumMeta.__members__),
             Attribute(name='__module__', kind='data',
                       defining_class=self.Color, object=__name__),
             Attribute(name='blue', kind='data',
@@ -3047,7 +3049,7 @@ CONVERT_TEST_NAME_F = 5
 
 class TestIntEnumConvert(unittest.TestCase):
     def test_convert_value_lookup_priority(self):
-        test_type = fastenum.IntEnum._convert(
+        test_type = enum.IntEnum._convert(
             'UnittestConvert',
             __name__,
             filter=lambda x: x.startswith('CONVERT_TEST_'))
@@ -3057,7 +3059,7 @@ class TestIntEnumConvert(unittest.TestCase):
         self.assertEqual(test_type(5).name, 'CONVERT_TEST_NAME_A')
 
     def test_convert(self):
-        test_type = fastenum.IntEnum._convert(
+        test_type = enum.IntEnum._convert(
             'UnittestConvert',
             __name__,
             filter=lambda x: x.startswith('CONVERT_TEST_'))

@@ -1,6 +1,7 @@
 import math
 import sys
 import time
+from enum import Enum
 from timeit import timeit
 from typing import Iterable, Dict, List, Tuple, Union, TypeVar
 
@@ -14,7 +15,6 @@ assert sys  # used in some cases, passed in through globals()
 TRY_EXCEPT_BLOCK_TMPL = 'try:\n    {expr}\nexcept: pass'
 
 assert fastenum.enabled
-Enum = fastenum.BuiltinEnum
 
 
 def geomean(numbers) -> float:
@@ -140,29 +140,28 @@ def test(
     return time_elapsed
 
 
-# As Enum was imported before patch, its creation will fail, so temporary remove patch
-fastenum.disable(reload_modules=False)
+fastenum.disable()
 
 
-class BuiltinEnum(Enum):
+class BuiltinEnum(str, Enum):
     FOO = 'FOO'
     BAR = 'BAR'
 
 
-fastenum.enable(reload_modules=False, frame_to_check=0)
+fastenum.enable()
 
 
-class PatchedEnum(fastenum.Enum):
+class PatchedEnum(str, Enum):
     FOO = 'FOO'
     BAR = 'BAR'
 
 
-class QratorEnum(metaclass=qratorenum.FastEnum):
+class QratorEnum(str, metaclass=qratorenum.FastEnum):
     FOO: 'QratorEnum' = 'FOO'
     BAR: 'QratorEnum' = 'BAR'
 
 
-class DiscordEnum(discordenum.Enum):
+class DiscordEnum(str, discordenum.Enum):
     FOO = 'FOO'
     BAR = 'BAR'
 
@@ -206,9 +205,9 @@ if __name__ == '__main__':
         print(f'\n\n{name}:')
 
         # Fast enum also affects builtin enums speed
-        fastenum.disable(reload_modules=False)
+        fastenum.disable()
         time_info = test(BuiltinEnum, expressions=expr, group_by_objects=False, **globals())
-        fastenum.enable(reload_modules=False, frame_to_check=0)
+        fastenum.enable()
 
         time_info.update(test(*candidates, expressions=expr, group_by_objects=False, **globals()))
         for t, elapsed_ in time_info.items():

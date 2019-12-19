@@ -1,67 +1,30 @@
-import enum
-import os
-import sys
 from enum import (
-    EnumMeta as BuiltinEnumMeta,
-    Enum as BuiltinEnum,
-    IntEnum as BuiltinIntEnum,
-    Flag as BuiltinFlag,
-    IntFlag as BuiltinIntFlag,
-    auto,
-    unique,
+    EnumMeta,
+    Enum,
+    Flag,
+    IntFlag,
     _make_class_unpicklable,
-    _decompose,
     _high_bit,
-)
+    _power_of_two)
 
-__all__ = [
-    'EnumMeta',
-    'Enum', 'IntEnum', 'Flag', 'IntFlag',
-    'BuiltinEnumMeta',
-    'BuiltinEnum', 'BuiltinIntEnum', 'BuiltinFlag', 'BuiltinIntFlag',
-    'auto', 'unique', 'enable', 'disable', 'enabled'
-]
-
-if os.environ.get('DISABLE_FASTENUM_AUTO_PATCH'):
-    AUTO_PATCH = False
-else:
-    AUTO_PATCH = True
+__all__ = ('enable', 'disable', 'enabled')
 
 
 def _get_all_subclasses(cls):
-    all_subclasses = {cls.__name__: cls}
+    all_subclasses = set()
     for subclass in cls.__subclasses__():
-        all_subclasses[subclass.__name__] = subclass
+        all_subclasses.add(subclass)
         all_subclasses.update(_get_all_subclasses(subclass))
 
     return all_subclasses
 
 
-BUILTIN_ENUMS = _get_all_subclasses(BuiltinEnum)
+BUILTIN_ENUMS = _get_all_subclasses(Enum)
 
 enabled = False
 
-# need to delete these as they really slowing things down
-_enums_getattr = BuiltinEnumMeta.__getattr__
-_enums_name = BuiltinEnum.__dict__['name']
-_enums_value = BuiltinEnum.__dict__['value']
 
-
-def _reload_modules(exclude: set):
-    import importlib
-
-    exclude = exclude | {__name__, '__main__', 'enum', 'py.test'}
-    include = {'sre_paese'}
-    enum_mentions = BUILTIN_ENUMS.keys() | {'enum'}
-    for name, module in sys.modules.copy().items():
-        if name.startswith('_pytest') or name in exclude:
-            continue
-        if name not in include and not module.__dict__.keys() & enum_mentions:
-            continue
-        importlib.reload(module)
-
-
-def enable(reload_modules: bool = True, exclude_modules: set = None, frame_to_check: int = 1):
+def enable():
     """
     Patches enum for best performance
 
@@ -73,48 +36,24 @@ def enable(reload_modules: bool = True, exclude_modules: set = None, frame_to_ch
     if enabled:
         raise RuntimeError('Builtin enum is already patched')
 
-    inspect = reload_inspect = None
-    if frame_to_check:
-        reload_inspect = 'inspect' in sys.modules
-        import inspect
-        current = inspect.currentframe()
-        outer = inspect.getouterframes(current)
-        outer_locals = outer[frame_to_check].frame.f_locals.keys()
+    patch: PatchMeta
+    for patch in Patch.__subclasses__():
+        patch.enable()
 
-        imported_enums = outer_locals & BUILTIN_ENUMS.keys()
-        if imported_enums:
-            raise RuntimeError(f'Use it before importing built-in enums: {imported_enums}')
-
-    del BuiltinEnum.name
-    del BuiltinEnum.value
-    del BuiltinEnumMeta.__getattr__
-
-    # setting name and value for all created enums,
-    # just in case they already was used and we couldn't
-    # track them, otherwise getting name or value attrs
-    # will raise AttributeError on them
-    for e in BUILTIN_ENUMS.values():
-        for m in e:
-            object.__setattr__(m, 'name', m._name_)
-            object.__setattr__(m, 'value', m._value_)
-
-    enum.EnumMeta = EnumMeta
-    enum.Enum = Enum
-    enum.IntEnum = IntEnum
-    enum.IntFlag = IntFlag
-    enum.Flag = Flag
+    for e in BUILTIN_ENUMS:
+        for member in e._member_map_.values():
+            object.__setattr__(member, 'name', member._name_)
+            object.__setattr__(member, 'value', member._value_)
+            object.__setattr__(
+                member,
+                '_unique_members_',
+                {k: v for v, k in member._value2member_map_.items() if k in member._member_map_}
+            )
 
     enabled = True
 
-    exclude = exclude_modules or set()
-    if reload_modules:
-        _reload_modules(exclude)
-    elif reload_inspect and 'inspect' not in exclude:
-        import importlib
-        importlib.reload(inspect)
 
-
-def disable(reload_modules=True, exclude_modules: set = None):
+def disable():
     """
     Opposite of enable()
     """
@@ -123,29 +62,90 @@ def disable(reload_modules=True, exclude_modules: set = None):
     if not enabled:
         raise RuntimeError('Builtin enum was not patched')
 
-    BuiltinEnum.name = _enums_name
-    BuiltinEnum.value = _enums_value
-    BuiltinEnumMeta.__getattr__ = _enums_getattr
-
-    enum.EnumMeta = BuiltinEnumMeta
-    enum.Enum = BuiltinEnum
-    enum.IntEnum = IntEnum
-    enum.IntFlag = BuiltinIntFlag
-    enum.Flag = BuiltinFlag
+    patch: PatchMeta
+    for patch in Patch.__subclasses__():
+        patch.disable()
 
     enabled = False
-    if reload_modules:
-        _reload_modules(exclude_modules or set())
 
 
-# Dummy value for Enum as EnumMeta explicitly checks for it, but of course
-# until EnumMeta finishes running the first time the Enum class doesn't exist.
-# This is also why there are checks in EnumMeta like `if Enum is not None`
-Enum = None
+class PatchMeta(type):
+
+    def __new__(mcs, name, bases, namespace):
+        type_to_patch = namespace.pop('__target__', None)
+        if type_to_patch is None:
+            return type.__new__(mcs, name, bases, {})
+
+        attrs_to_delete = namespace.pop('__attrs_to_delete__', set())
+        del namespace['__module__']
+        del namespace['__qualname__']
+
+        original_attrs = {
+            attr: type_to_patch.__dict__[attr]
+            for attr in namespace.keys() | attrs_to_delete
+            if attr in type_to_patch.__dict__
+        }
+
+        cls = type.__new__(mcs, name, bases, {})
+
+        cls.__target__ = type_to_patch
+        cls.__attrs_to_patch__ = namespace
+        cls.__original_attrs__ = original_attrs
+        cls.__attrs_to_delete__ = attrs_to_delete
+        cls.__subclass_attrs__ = {}
+        cls.enabled = False
+        return cls
+
+    def enable(cls):
+        target = cls.__target__
+        if not issubclass(target, type):
+            subclasses = _get_all_subclasses(target)
+        else:
+            subclasses = set()
+
+        for attr in cls.__attrs_to_delete__:
+            delattr(target, attr)
+            old_value = getattr(target, attr, None)
+            for sub_cls in subclasses:
+                try:
+                    if getattr(sub_cls, attr) is old_value:
+                        delattr(sub_cls, attr)
+                except AttributeError:
+                    pass
+
+        for attr, new_value in cls.__attrs_to_patch__.items():
+            try:
+                old_value = getattr(target, attr)
+            except AttributeError:
+                continue
+            else:
+                cls.__original_attrs__[attr] = old_value
+                for sub_cls in subclasses:
+                    if getattr(sub_cls, attr) is old_value:
+                        setattr(sub_cls, attr, new_value)
+                        cls.__subclass_attrs__.setdefault(attr, set()).add(sub_cls)
+            finally:
+                setattr(target, attr, new_value)
+
+        cls.enabled = True
+
+    def disable(cls):
+        target = cls.__target__
+        for attr, value in cls.__original_attrs__.items():
+            setattr(target, attr, value)
+            for sub_cls in cls.__subclass_attrs__.get(attr, ()):
+                setattr(sub_cls, attr, value)
+
+        cls.enabled = False
 
 
-class EnumMeta(BuiltinEnumMeta):
-    """Metaclass for Enum"""
+class Patch(metaclass=PatchMeta):
+    ...
+
+
+class PatchedEnumMeta(Patch):
+    __target__ = EnumMeta
+    __attrs_to_delete__ = {'__getattr__'}
 
     def __new__(mcs, cls_name, bases, namespace):
         # an Enum class is final once enumeration items have been defined; it
@@ -159,7 +159,6 @@ class EnumMeta(BuiltinEnumMeta):
         for key in ignore:
             namespace.pop(key, None)
         member_type, first_enum = mcs._get_mixins_(bases)
-        namespace['__builtin_type__'] = first_enum
         __new__, save_new, use_args = mcs._find_new_(namespace, member_type, first_enum)
         # save enum items into separate mapping so they don't get baked into
         # the new class
@@ -284,50 +283,13 @@ class EnumMeta(BuiltinEnumMeta):
 
         return cls
 
-    def __instancecheck__(cls, instance):
-        return isinstance(instance, cls.__builtin_type__)
-
-    def __subclasscheck__(cls, subclass):
-        return issubclass(subclass, cls.__builtin_type__)
-
     def __iter__(cls):
         return iter(cls._unique_members_.values())
 
-    @staticmethod
-    def _get_mixins_(bases):
-        """Returns the type for creating enum members, and the first inherited
-        enum class.
 
-        bases: the tuple of bases that was given to __new__
-
-        """
-        if not bases:
-            return object, Enum
-
-        def _find_data_type(bases):
-            for chain in bases:
-                for base in chain.__mro__:
-                    if base is object:
-                        continue
-                    elif '__new__' in base.__dict__:
-                        if issubclass(base, BuiltinEnum):
-                            continue
-                        return base
-
-        # ensure final parent class is an Enum derivative, find any concrete
-        # data type, and check that Enum has no members
-        first_enum = bases[-1]
-        if not issubclass(first_enum, BuiltinEnum):
-            raise TypeError("new enumerations should be created as "
-                            "`EnumName([mixin_type, ...] [data_type,] enum_type)`")
-        member_type = _find_data_type(bases) or object
-        if first_enum._member_names_:
-            raise TypeError("Cannot extend enumerations")
-        return member_type, first_enum
-
-
-class Enum(BuiltinEnum, metaclass=EnumMeta):
-    __builtin_type__: BuiltinEnum
+class PatchedEnum(Patch):
+    __target__ = Enum
+    __attrs_to_delete__ = {'name', 'value'}
 
     def __new__(cls, value):
         """
@@ -361,34 +323,49 @@ class Enum(BuiltinEnum, metaclass=EnumMeta):
         return possible_member
 
     def __setattr__(self, key, value):
-        if key in ('name', 'value'):
-            raise AttributeError()
+        if key in {'name', 'value'}:
+            raise AttributeError("Can't set attribute")
         object.__setattr__(self, key, value)
 
     def __delattr__(self, key):
-        if key in ('name', 'value'):
-            raise AttributeError()
-        object.__delattr__(self, key, value)
+        if key in {'name', 'value'}:
+            raise AttributeError("Can't del attribute")
+        object.__delattr__(self, key)
 
     @classmethod
     def __is_fast__(cls):
         return enabled
 
 
-class IntEnum(Enum, BuiltinIntEnum):
-    ...
+class PatchedFlag(Patch):
+    __target__ = Flag
 
-
-class Flag(Enum, BuiltinFlag):
     @classmethod
     def _create_pseudo_member_(cls, value):
-        possible_member = super()._create_pseudo_member_(value)
-        object.__setattr__(possible_member, 'value', possible_member._value_)
-        object.__setattr__(possible_member, 'name', possible_member._name_)
-        return possible_member
+        """
+        Create a composite member iff value contains only members.
+        """
+        pseudo_member = cls._value2member_map_.get(value, None)
+        if pseudo_member is None:
+            # verify all bits are accounted for
+            _, extra_flags = _decompose(cls, value)
+            if extra_flags:
+                raise ValueError("%r is not a valid %s" % (value, cls.__name__))
+            # construct a singleton enum pseudo-member
+            pseudo_member = object.__new__(cls)
+            pseudo_member._name_ = None
+            pseudo_member._value_ = value
+            # use setdefault in case another thread already created a composite
+            # with this value
+            pseudo_member = cls._value2member_map_.setdefault(value, pseudo_member)
+            object.__setattr__(pseudo_member, 'value', pseudo_member._value_)
+            object.__setattr__(pseudo_member, 'name', pseudo_member._name_)
+        return pseudo_member
 
 
-class IntFlag(Flag, BuiltinIntFlag):
+class PatchedIntFlag(Patch):
+    __target__ = IntFlag
+
     @classmethod
     def _create_pseudo_member_(cls, value):
         pseudo_member = cls._value2member_map_.get(value, None)
@@ -422,16 +399,41 @@ class IntFlag(Flag, BuiltinIntFlag):
         return pseudo_member
 
 
-EnumMeta.__module__ = Enum.__module__ = IntEnum.__module__ = Flag.__module__ = IntFlag.__module__ = 'fastenum'
+def _decompose(flag, value):
+    """Extract all members from the value."""
+    # _decompose is only called if the value is not named
+    not_covered = value
+    negative = value < 0
+    # issue29167: wrap accesses to _value2member_map_ in a list to avoid race
+    #             conditions between iterating over it and having more pseudo-
+    #             members added to it
+    if negative:
+        # only check for named flags
+        flags_to_check = [
+            (m, v)
+            for v, m in flag._value2member_map_.copy().items()
+            if m.name is not None
+        ]
+    else:
+        # check for named flags and powers-of-two flags
+        flags_to_check = [
+            (m, v)
+            for v, m in flag._value2member_map_.copy().items()
+            if m.name is not None or _power_of_two(v)
+        ]
+    members = []
+    for member, member_value in flags_to_check:
+        if member_value and member_value & value == member_value:
+            members.append(member)
+            not_covered &= ~member_value
 
-if AUTO_PATCH and __name__ != '__main__':
-    # from enum import Enum  <-- it may fail because of this
-    # import fastenum
-    #
-    # to avoid such behavior:
-    #   - use `import enum` instead of `from enum import Enum`
-    #   - import enums from `enum` module after patch is complete
-    #   - disable auto patch, by setting os.environ['DISABLE_FASTENUM_AUTO_PATCH'] to True
+    if not members and value in flag._value2member_map_:
+        members.append(flag._value2member_map_[value])
+    members.sort(key=lambda m: m._value_, reverse=True)
+    if len(members) > 1 and members[0].value == value:
+        # we have the breakdown, don't need the value member itself
+        members.pop(0)
+    return members, not_covered
 
-    # frame 7 is the frame of module from which current module is imported
-    enable(frame_to_check=7)
+
+enable()
