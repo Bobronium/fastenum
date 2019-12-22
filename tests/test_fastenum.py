@@ -1,10 +1,10 @@
 import subprocess
 import sys
 import warnings
-from enum import Enum, EnumMeta
+from enum import Enum, EnumMeta, Flag
 
 import fastenum
-from fastenum.fastenum import PatchedEnum, PatchedEnumMeta
+from fastenum import PatchedEnum, PatchedEnumMeta
 
 assert fastenum.enabled
 
@@ -25,19 +25,17 @@ def test_name_value_shadowing():
 def test_patched_enum():
     assert fastenum.enabled
     fastenum.disable()
-    assert not Enum.__is_fast__()
 
     assert hasattr(EnumMeta, '__getattr__')
     assert 'name' in Enum.__dict__
     assert 'value' in Enum.__dict__
 
-    assert Enum.__new__ is not PatchedEnum.__attrs_to_patch__['__new__']
-    assert Enum.__new__ is PatchedEnum.__original_attrs__['__new__']
-    assert EnumMeta.__new__ is not PatchedEnumMeta.__attrs_to_patch__['__new__']
-    assert EnumMeta.__new__ is PatchedEnumMeta.__original_attrs__['__new__']
+    assert Enum.__new__ is not PatchedEnum.__new__
+    assert Enum.__dict__['__new__'] is PatchedEnum.__original_attrs__['__new__']
+    assert EnumMeta.__new__ is not PatchedEnumMeta.__new__
+    assert EnumMeta.__dict__['__new__'] is PatchedEnumMeta.__original_attrs__['__new__']
 
     fastenum.enable()
-    assert Enum.__is_fast__()
 
     assert not hasattr(EnumMeta, '__getattr__')
     assert 'name' not in Enum.__dict__
@@ -45,6 +43,33 @@ def test_patched_enum():
 
     assert Enum.__new__ is PatchedEnum.__attrs_to_patch__['__new__']
     assert EnumMeta.__new__ is PatchedEnumMeta.__attrs_to_patch__['__new__']
+
+
+def test_non_named_members_have_attrs():
+    assert fastenum.enabled
+    fastenum.disable()
+
+    class Foo(Flag):
+        a = 1
+        b = 2
+
+    fake_member = Foo._create_pseudo_member_(3)
+    assert 'name' not in fake_member.__dict__
+    assert 'value' not in fake_member.__dict__
+    Foo._value2member_map_[fake_member._value_] = fake_member
+
+    fastenum.enable()
+    assert 'name' in fake_member.__dict__
+    assert 'value' in fake_member.__dict__
+
+
+def test_attrs_set():
+    class Foo(Flag):
+        a = 1
+        b = 2
+
+    Foo.a._value_ = 42
+    assert Foo.a.value == 42
 
 
 def test_builtin_tests():

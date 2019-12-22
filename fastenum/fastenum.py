@@ -5,111 +5,70 @@ from enum import (
     IntFlag,
     _make_class_unpicklable,
     _high_bit,
-    _power_of_two)
+)
 
 __all__ = ('enable', 'disable', 'enabled')
 
 
 def _get_all_subclasses(cls):
     all_subclasses = set()
-    for subclass in cls.__subclasses__():
+    for subclass in type.__subclasses__(cls):
         all_subclasses.add(subclass)
         all_subclasses.update(_get_all_subclasses(subclass))
 
     return all_subclasses
 
 
-BUILTIN_ENUMS = _get_all_subclasses(Enum)
-
-enabled = False
-
-
-def enable():
-    """
-    Patches enum for best performance
-
-    :param reload_modules: whether to reload modules after patch or not
-    :param exclude_modules: set of modules which will not be reloaded
-    :param frame_to_check: frame globals of which will be checked for imported enums (set 0 to skip check)
-    """
-    global enabled
-    if enabled:
-        raise RuntimeError('Builtin enum is already patched')
-
-    patch: PatchMeta
-    for patch in Patch.__subclasses__():
-        patch.enable()
-
-    for e in BUILTIN_ENUMS:
-        for member in e._member_map_.values():
-            object.__setattr__(member, 'name', member._name_)
-            object.__setattr__(member, 'value', member._value_)
-            object.__setattr__(
-                member,
-                '_unique_members_',
-                {k: v for v, k in member._value2member_map_.items() if k in member._member_map_}
-            )
-
-    enabled = True
-
-
-def disable():
-    """
-    Opposite of enable()
-    """
-    global enabled
-
-    if not enabled:
-        raise RuntimeError('Builtin enum was not patched')
-
-    patch: PatchMeta
-    for patch in Patch.__subclasses__():
-        patch.disable()
-
-    enabled = False
-
-
 class PatchMeta(type):
+    __enabled__: bool
+
+    def __prepare__(cls, *args, **kwargs):
+        return type.__prepare__(*args, **kwargs)
 
     def __new__(mcs, name, bases, namespace):
         type_to_patch = namespace.pop('__target__', None)
         if type_to_patch is None:
             return type.__new__(mcs, name, bases, {})
 
-        attrs_to_delete = namespace.pop('__attrs_to_delete__', set())
+        to_delete = namespace.pop('__to_delete__', set())
+        to_update = namespace.pop('__to_update__', set())
+
         del namespace['__module__']
         del namespace['__qualname__']
 
+        patched_attrs = {
+            attr: namespace[attr]
+            for attr in to_update
+
+        }
         original_attrs = {
             attr: type_to_patch.__dict__[attr]
-            for attr in namespace.keys() | attrs_to_delete
+            for attr in to_update | to_delete
             if attr in type_to_patch.__dict__
         }
-
         cls = type.__new__(mcs, name, bases, {})
 
         cls.__target__ = type_to_patch
-        cls.__attrs_to_patch__ = namespace
+        cls.__attrs_to_patch__ = patched_attrs
         cls.__original_attrs__ = original_attrs
-        cls.__attrs_to_delete__ = attrs_to_delete
+        cls.__extra__ = (to_update | to_delete) ^ original_attrs.keys()
+        cls.__attrs_to_delete__ = to_delete
         cls.__subclass_attrs__ = {}
-        cls.enabled = False
+        cls.__enabled__ = False
         return cls
 
     def enable(cls):
         target = cls.__target__
-        if not issubclass(target, type):
-            subclasses = _get_all_subclasses(target)
-        else:
-            subclasses = set()
+        subclasses = _get_all_subclasses(target)
 
         for attr in cls.__attrs_to_delete__:
+            old_value = getattr(target, attr)
             delattr(target, attr)
-            old_value = getattr(target, attr, None)
             for sub_cls in subclasses:
                 try:
                     if getattr(sub_cls, attr) is old_value:
                         delattr(sub_cls, attr)
+                        cls.__subclass_attrs__.setdefault(attr, set()).add(sub_cls)
                 except AttributeError:
                     pass
 
@@ -127,7 +86,7 @@ class PatchMeta(type):
             finally:
                 setattr(target, attr, new_value)
 
-        cls.enabled = True
+        cls.__enabled__ = True
 
     def disable(cls):
         target = cls.__target__
@@ -136,7 +95,10 @@ class PatchMeta(type):
             for sub_cls in cls.__subclass_attrs__.get(attr, ()):
                 setattr(sub_cls, attr, value)
 
-        cls.enabled = False
+        for attr in cls.__extra__:
+            del_attr(target, attr)
+
+        cls.__enabled__ = False
 
 
 class Patch(metaclass=PatchMeta):
@@ -145,7 +107,8 @@ class Patch(metaclass=PatchMeta):
 
 class PatchedEnumMeta(Patch):
     __target__ = EnumMeta
-    __attrs_to_delete__ = {'__getattr__'}
+    __to_delete__ = {'__getattr__'}
+    __to_update__ = {'__new__', '__iter__'}
 
     def __new__(mcs, cls_name, bases, namespace):
         # an Enum class is final once enumeration items have been defined; it
@@ -234,10 +197,7 @@ class PatchedEnumMeta(Patch):
                 else:
                     value = enum_member._value_
 
-            # rewriting Built-in Enum name and value properties
-            object.__setattr__(enum_member, '_name_', member_name)
-            object.__setattr__(enum_member, 'name', member_name)
-            object.__setattr__(enum_member, 'value', value)
+            enum_member._name_ = member_name
 
             enum_member.__objclass__ = cls
             enum_member.__init__(*args)
@@ -287,9 +247,11 @@ class PatchedEnumMeta(Patch):
         return iter(cls._unique_members_.values())
 
 
+# @patch_class(target=Enum, update={'__new__', '__setattr__', '__delattr__'}, delete={'name', 'value'})
 class PatchedEnum(Patch):
     __target__ = Enum
-    __attrs_to_delete__ = {'name', 'value'}
+    __to_delete__ = {'name', 'value'}
+    __to_update__ = {'__new__', '__setattr__', '__delattr__'}
 
     def __new__(cls, value):
         """
@@ -301,12 +263,13 @@ class PatchedEnum(Patch):
         """
         # by-value search for a matching enum member
         # see if it's in the reverse mapping (for hashable values)
+        if value.__class__ is cls:
+            # moved it here in favor of faster lookups by value
+            return value
         try:
             return cls._value2member_map_[value]
         except KeyError:
-            if type(value) is cls:
-                # moved it here in favor of faster lookups by value
-                return value
+            pass
         except TypeError:
             # not there, now do long search -- O(n) behavior
             for member in cls._member_map_.values():
@@ -317,14 +280,14 @@ class PatchedEnum(Patch):
         possible_member = cls._missing_(value)
         if possible_member is None:
             raise ValueError("%r is not a valid %s" % (value, cls.__name__))
-        elif hasattr(possible_member, '_name_') and hasattr(possible_member, '_value_'):
-            object.__setattr__(possible_member, 'value', possible_member._value_)
-            object.__setattr__(possible_member, 'name', possible_member._name_)
         return possible_member
 
     def __setattr__(self, key, value):
         if key in {'name', 'value'}:
             raise AttributeError("Can't set attribute")
+        elif key in {'_name_', '_value_'}:
+            # hook to also set 'value' and 'name' attr
+            object.__setattr__(self, key[1:-1], value)
         object.__setattr__(self, key, value)
 
     def __delattr__(self, key):
@@ -332,101 +295,27 @@ class PatchedEnum(Patch):
             raise AttributeError("Can't del attribute")
         object.__delattr__(self, key)
 
-    @classmethod
-    def __is_fast__(cls):
-        return enabled
 
-
-class PatchedFlag(Patch):
-    __target__ = Flag
-
-    @classmethod
-    def _create_pseudo_member_(cls, value):
-        """
-        Create a composite member iff value contains only members.
-        """
-        pseudo_member = cls._value2member_map_.get(value, None)
-        if pseudo_member is None:
-            # verify all bits are accounted for
-            _, extra_flags = _decompose(cls, value)
-            if extra_flags:
-                raise ValueError("%r is not a valid %s" % (value, cls.__name__))
-            # construct a singleton enum pseudo-member
-            pseudo_member = object.__new__(cls)
-            pseudo_member._name_ = None
-            pseudo_member._value_ = value
-            # use setdefault in case another thread already created a composite
-            # with this value
-            pseudo_member = cls._value2member_map_.setdefault(value, pseudo_member)
-            object.__setattr__(pseudo_member, 'value', pseudo_member._value_)
-            object.__setattr__(pseudo_member, 'name', pseudo_member._name_)
-        return pseudo_member
-
-
-class PatchedIntFlag(Patch):
-    __target__ = IntFlag
-
-    @classmethod
-    def _create_pseudo_member_(cls, value):
-        pseudo_member = cls._value2member_map_.get(value, None)
-        if pseudo_member is None:
-            need_to_create = [value]
-            # get unaccounted for bits
-            _, extra_flags = _decompose(cls, value)
-            # timer = 10
-            while extra_flags:
-                # timer -= 1
-                bit = _high_bit(extra_flags)
-                flag_value = 2 ** bit
-                if (flag_value not in cls._value2member_map_ and
-                        flag_value not in need_to_create
-                ):
-                    need_to_create.append(flag_value)
-                if extra_flags == -flag_value:
-                    extra_flags = 0
-                else:
-                    extra_flags ^= flag_value
-            for value in reversed(need_to_create):
-                # construct singleton pseudo-members
-                pseudo_member = int.__new__(cls, value)
-                pseudo_member._name_ = None
-                pseudo_member._value_ = value
-                object.__setattr__(pseudo_member, 'value', value)
-                object.__setattr__(pseudo_member, 'name', None)
-                # use setdefault in case another thread already created a composite
-                # with this value
-                pseudo_member = cls._value2member_map_.setdefault(value, pseudo_member)
-        return pseudo_member
-
-
+# faster _decompose version from python 3.9
 def _decompose(flag, value):
     """Extract all members from the value."""
     # _decompose is only called if the value is not named
     not_covered = value
     negative = value < 0
-    # issue29167: wrap accesses to _value2member_map_ in a list to avoid race
-    #             conditions between iterating over it and having more pseudo-
-    #             members added to it
-    if negative:
-        # only check for named flags
-        flags_to_check = [
-            (m, v)
-            for v, m in flag._value2member_map_.copy().items()
-            if m.name is not None
-        ]
-    else:
-        # check for named flags and powers-of-two flags
-        flags_to_check = [
-            (m, v)
-            for v, m in flag._value2member_map_.copy().items()
-            if m.name is not None or _power_of_two(v)
-        ]
     members = []
-    for member, member_value in flags_to_check:
+    for member in flag:
+        member_value = member._value_
         if member_value and member_value & value == member_value:
             members.append(member)
             not_covered &= ~member_value
-
+    if not negative:
+        tmp = not_covered
+        while tmp:
+            flag_value = 2 ** _high_bit(tmp)
+            if flag_value in flag._value2member_map_:
+                members.append(flag._value2member_map_[flag_value])
+                not_covered &= ~flag_value
+            tmp &= ~flag_value
     if not members and value in flag._value2member_map_:
         members.append(flag._value2member_map_[value])
     members.sort(key=lambda m: m._value_, reverse=True)
@@ -436,4 +325,39 @@ def _decompose(flag, value):
     return members, not_covered
 
 
-enable()
+def _enable():
+    """
+    Patches enum for best performance
+
+    :param reload_modules: whether to reload modules after patch or not
+    :param exclude_modules: set of modules which will not be reloaded
+    :param frame_to_check: frame globals of which will be checked for imported enums (set 0 to skip check)
+    """
+    patch: PatchMeta
+    for patch in Patch.__subclasses__():
+        patch.enable()
+
+    # setting missing attributes to enum types and members that were created before patch
+    for enum_cls in _get_all_subclasses(Enum):
+        unique_members = set(enum_cls._member_names_)
+        type.__setattr__(
+            enum_cls,
+            '_unique_members_',
+            {k: v for k, v in enum_cls._member_map_.items() if k in unique_members}
+        )
+        # e._value2member_map_ can have extra members so prefer it,
+        # but it also can be empty if values are unhashable
+        for member in (enum_cls._value2member_map_ or enum_cls._member_map_).values():
+            object.__setattr__(member, 'name', member._name_)
+            object.__setattr__(member, 'value', member._value_)
+
+
+def _disable():
+    """
+    Opposite of enable()
+    """
+    patch: PatchMeta
+    for patch in Patch.__subclasses__():
+        patch.disable()
+
+
