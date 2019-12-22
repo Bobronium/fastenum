@@ -1,13 +1,10 @@
 from enum import (
     EnumMeta,
     Enum,
-    Flag,
-    IntFlag,
     _make_class_unpicklable,
     _high_bit,
 )
-
-__all__ = ('enable', 'disable', 'enabled')
+from typing import MutableMapping
 
 
 def _get_all_subclasses(cls):
@@ -17,6 +14,40 @@ def _get_all_subclasses(cls):
         all_subclasses.update(_get_all_subclasses(subclass))
 
     return all_subclasses
+
+
+class _Missing:
+    def __repr__(self):
+        return "< 'MISSING' >"
+
+
+MISSING = _Missing()
+
+
+def get_attr(t, name, default=MISSING):
+    value = t.__dict__.get(name, default)
+    if value is not get_attr:
+        if hasattr(value, '__get__') and type(value) in {staticmethod, classmethod}:
+            return getattr(t, name, get_attr)
+        else:
+            return value
+    return getattr(t, name, get_attr)
+
+
+def del_attr(t, name):
+    old = get_attr(t, name, MISSING)
+    if old is not MISSING:
+        delattr(t, name)
+    return old
+
+
+def set_attr(t, name, value):
+    old = get_attr(t, name)
+    if isinstance(t.__dict__, MutableMapping):
+        t.__dict__[name] = value
+    else:
+        setattr(t, name, value)
+    return old
 
 
 class PatchMeta(type):
@@ -32,9 +63,6 @@ class PatchMeta(type):
 
         to_delete = namespace.pop('__to_delete__', set())
         to_update = namespace.pop('__to_update__', set())
-
-        del namespace['__module__']
-        del namespace['__qualname__']
 
         patched_attrs = {
             attr: namespace[attr]
@@ -53,7 +81,7 @@ class PatchMeta(type):
         cls.__original_attrs__ = original_attrs
         cls.__extra__ = (to_update | to_delete) ^ original_attrs.keys()
         cls.__attrs_to_delete__ = to_delete
-        cls.__subclass_attrs__ = {}
+        cls.__redefined_on_subclasses__ = {}
         cls.__enabled__ = False
         return cls
 
@@ -62,38 +90,32 @@ class PatchMeta(type):
         subclasses = _get_all_subclasses(target)
 
         for attr in cls.__attrs_to_delete__:
-            old_value = getattr(target, attr)
-            delattr(target, attr)
+            old_value = del_attr(target, attr)
+            if old_value is MISSING:
+                continue
             for sub_cls in subclasses:
-                try:
-                    if getattr(sub_cls, attr) is old_value:
-                        delattr(sub_cls, attr)
-                        cls.__subclass_attrs__.setdefault(attr, set()).add(sub_cls)
-                except AttributeError:
-                    pass
+                if get_attr(sub_cls, attr) is old_value:
+                    del_attr(sub_cls, attr)
+                    cls.__redefined_on_subclasses__.setdefault(attr, set()).add(sub_cls)
 
         for attr, new_value in cls.__attrs_to_patch__.items():
-            try:
-                old_value = getattr(target, attr)
-            except AttributeError:
+            old_value = set_attr(target, attr, new_value)
+            if old_value is MISSING:
                 continue
-            else:
-                cls.__original_attrs__[attr] = old_value
-                for sub_cls in subclasses:
-                    if getattr(sub_cls, attr) is old_value:
-                        setattr(sub_cls, attr, new_value)
-                        cls.__subclass_attrs__.setdefault(attr, set()).add(sub_cls)
-            finally:
-                setattr(target, attr, new_value)
+            cls.__original_attrs__[attr] = old_value
+            for sub_cls in subclasses:
+                if get_attr(sub_cls, attr) is old_value:
+                    set_attr(sub_cls, attr, new_value)
+                    cls.__redefined_on_subclasses__.setdefault(attr, set()).add(sub_cls)
 
         cls.__enabled__ = True
 
     def disable(cls):
         target = cls.__target__
         for attr, value in cls.__original_attrs__.items():
-            setattr(target, attr, value)
-            for sub_cls in cls.__subclass_attrs__.get(attr, ()):
-                setattr(sub_cls, attr, value)
+            set_attr(target, attr, value)
+            for sub_cls in cls.__redefined_on_subclasses__.get(attr, ()):
+                set_attr(sub_cls, attr, value)
 
         for attr in cls.__extra__:
             del_attr(target, attr)
@@ -247,7 +269,6 @@ class PatchedEnumMeta(Patch):
         return iter(cls._unique_members_.values())
 
 
-# @patch_class(target=Enum, update={'__new__', '__setattr__', '__delattr__'}, delete={'name', 'value'})
 class PatchedEnum(Patch):
     __target__ = Enum
     __to_delete__ = {'name', 'value'}
@@ -359,5 +380,3 @@ def _disable():
     patch: PatchMeta
     for patch in Patch.__subclasses__():
         patch.disable()
-
-
