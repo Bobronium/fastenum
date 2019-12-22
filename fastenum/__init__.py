@@ -15,10 +15,6 @@ enabled = False
 def enable():
     """
     Patches enum for best performance
-
-    :param reload_modules: whether to reload modules after patch or not
-    :param exclude_modules: set of modules which will not be reloaded
-    :param frame_to_check: frame globals of which will be checked for imported enums (set 0 to skip check)
     """
     global enabled
     if enabled:
