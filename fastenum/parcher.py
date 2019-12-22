@@ -1,4 +1,5 @@
-from typing import MutableMapping, Any, Set, Type
+import gc
+from typing import MutableMapping, Any, Set, Type, Callable
 
 
 class _Missing:
@@ -47,16 +48,20 @@ def set_attr(t, name, value):
 class PatchMeta(type):
     __enabled__: bool
 
+    __run_on_class__: Callable[[Type[Any]], None]
+    __run_on_instance__: Callable[[Any], None]
+
     def __prepare__(cls, *args, **kwargs):
         return type.__prepare__(*args, **kwargs)
 
-    def __new__(mcs, name, bases, namespace, target=None, delete=None, update=None):
+    def __new__(mcs, name, bases, namespace, target=None, delete=None, update=None, keep=None):
         target = target or namespace.pop('__target__', None)
         if target is None:
-            return type.__new__(mcs, name, bases, {})
+            return type.__new__(mcs, name, bases, namespace)
 
         to_delete = delete or namespace.pop('__to_delete__', set())
         to_update = update or namespace.pop('__to_update__', set())
+        to_keep = keep or namespace.pop('__to_keep__', set())
 
         patched_attrs = {
             attr: namespace[attr]
@@ -68,12 +73,12 @@ class PatchMeta(type):
             for attr in to_update | to_delete
             if attr in target.__dict__
         }
-        cls = type.__new__(mcs, name, bases, {})
+        cls = type.__new__(mcs, name, bases, namespace)
 
         cls.__target__ = target
         cls.__to_update__ = patched_attrs
         cls.__original_attrs__ = original_attrs
-        cls.__extra__ = (to_update | to_delete) ^ original_attrs.keys()
+        cls.__extra__ = (to_update | to_delete) ^ (original_attrs.keys() | to_keep)
         cls.__to_delete__ = to_delete
         cls.__redefined_on_subclasses__ = {}
         cls.__enabled__ = False
@@ -82,6 +87,16 @@ class PatchMeta(type):
     def enable(cls):
         target = cls.__target__
         subclasses = _get_all_subclasses(target)
+
+        if cls.__run_on_class__:
+            cls.__run_on_class__(target)
+            for sub_cls in subclasses:
+                cls.__run_on_class__(sub_cls)
+
+        if cls.__run_on_instance__:
+            for obj in gc.get_objects():
+                if isinstance(obj, target):
+                    cls.__run_on_instance__(obj)
 
         for attr in cls.__to_delete__:
             old_value = del_attr(target, attr)
@@ -118,7 +133,12 @@ class PatchMeta(type):
 
 
 class Patch(metaclass=PatchMeta):
+    """Class to declare attributes to patch other classes"""
+
     __target__: Type[Any]
     __to_update__: Set[str]
     __to_delete__: Set[str]
     __enabled__: bool
+
+    __run_on_class__: Callable[[Type[Any]], None] = None
+    __run_on_instance__: Callable[[Any], None] = None

@@ -1,7 +1,7 @@
-from enum import Enum
+import enum
 
 from .parcher import _get_all_subclasses, Patch, PatchMeta
-from .patches import EnumMetaPatch, EnumPatch
+from .patches import EnumMetaPatch, EnumPatch, DynamicClassAttributePatch, EnumDictPatch
 
 __all__ = (
     'disable',
@@ -11,6 +11,8 @@ __all__ = (
 
 enabled = False
 
+orig_decompose = enum._decompose
+
 
 def enable():
     """
@@ -18,39 +20,27 @@ def enable():
     """
     global enabled
     if enabled:
-        raise RuntimeError('Builtin enum is already patched')
+        raise RuntimeError('Nothing to enable: patch is already applied')
 
     patch: PatchMeta
     for patch in Patch.__subclasses__():
         patch.enable()
-
-    # setting missing attributes to enum types and members that were created before patch
-    for enum_cls in _get_all_subclasses(Enum):
-        unique_members = set(enum_cls._member_names_)
-        type.__setattr__(
-            enum_cls,
-            '_unique_members_',
-            {k: v for k, v in enum_cls._member_map_.items() if k in unique_members}
-        )
-        # e._value2member_map_ can have extra members so prefer it,
-        # but it also can be empty if values are unhashable
-        for member in (enum_cls._value2member_map_ or enum_cls._member_map_).values():
-            object.__setattr__(member, 'name', member._name_)
-            object.__setattr__(member, 'value', member._value_)
+    enum._decompose = patches._decompose
     enabled = True
 
 
 def disable():
     """
-    Opposite of enable()
+    Restores enum to its origin state
     """
     global enabled
     if not enabled:
-        raise RuntimeError('Builtin enum was not patched yet')
+        raise RuntimeError('Nothing to disable: patch was not applied')
 
     patch: PatchMeta
     for patch in Patch.__subclasses__():
         patch.disable()
+    enum._decompose = orig_decompose
     enabled = False
 
 

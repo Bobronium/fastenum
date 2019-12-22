@@ -1,7 +1,8 @@
 import subprocess
 import sys
-import warnings
 from enum import Enum, EnumMeta, Flag
+
+import pytest
 
 import fastenum
 from fastenum import EnumPatch, EnumMetaPatch
@@ -72,12 +73,12 @@ def test_attrs_set():
     assert Foo.a.value == 42
 
 
-def test_builtin_tests():
-    for version in 6, 7, 8:
-        test_cmd = [f'python3.{version}', '-m', 'unittest', f'tests.builtin_tests.test_3{version}']
-        try:
-            print(f'\nRUNNING ' + ' '.join(test_cmd), file=sys.stderr)
-            subprocess.run(test_cmd, check=True)
-        except FileNotFoundError as e:
-            warnings.warn(f'Unable to run test with {test_cmd}, {str(e)}')
-            continue
+@pytest.mark.parametrize('python', ('python3.6', 'python3.7', 'python3.8'))
+def test_builtin_tests(python):
+    try:
+        print(f'\nRunning {python} tests', file=sys.stderr)
+        result = subprocess.run([python, f'builtin_test.py'])
+    except FileNotFoundError as e:
+        return pytest.skip(f'Unable to run test with {python}, {str(e)}')
+
+    assert result.returncode == 0, f'Tests failed in {python}'
