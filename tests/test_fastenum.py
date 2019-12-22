@@ -4,7 +4,7 @@ import warnings
 from enum import Enum, EnumMeta, Flag
 
 import fastenum
-from fastenum import PatchedEnum, PatchedEnumMeta
+from fastenum import EnumPatch, EnumMetaPatch
 
 assert fastenum.enabled
 
@@ -30,10 +30,10 @@ def test_patched_enum():
     assert 'name' in Enum.__dict__
     assert 'value' in Enum.__dict__
 
-    assert Enum.__new__ is not PatchedEnum.__new__
-    assert Enum.__dict__['__new__'] is PatchedEnum.__original_attrs__['__new__']
-    assert EnumMeta.__new__ is not PatchedEnumMeta.__new__
-    assert EnumMeta.__dict__['__new__'] is PatchedEnumMeta.__original_attrs__['__new__']
+    assert Enum.__new__ is not EnumPatch.__new__
+    assert Enum.__dict__['__new__'] is EnumPatch.__original_attrs__['__new__']
+    assert EnumMeta.__new__ is not EnumMetaPatch.__new__
+    assert EnumMeta.__dict__['__new__'] is EnumMetaPatch.__original_attrs__['__new__']
 
     fastenum.enable()
 
@@ -41,8 +41,8 @@ def test_patched_enum():
     assert 'name' not in Enum.__dict__
     assert 'value' not in Enum.__dict__
 
-    assert Enum.__new__ is PatchedEnum.__attrs_to_patch__['__new__']
-    assert EnumMeta.__new__ is PatchedEnumMeta.__attrs_to_patch__['__new__']
+    assert Enum.__new__ is EnumPatch.__to_update__['__new__']
+    assert EnumMeta.__new__ is EnumMetaPatch.__to_update__['__new__']
 
 
 def test_non_named_members_have_attrs():

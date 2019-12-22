@@ -1,137 +1,11 @@
-from enum import (
-    EnumMeta,
-    Enum,
-    _make_class_unpicklable,
-    _high_bit,
-)
-from typing import MutableMapping
+from enum import EnumMeta, _make_class_unpicklable, Enum, _high_bit
+
+from fastenum.parcher import Patch
 
 
-def _get_all_subclasses(cls):
-    all_subclasses = set()
-    for subclass in type.__subclasses__(cls):
-        all_subclasses.add(subclass)
-        all_subclasses.update(_get_all_subclasses(subclass))
-
-    return all_subclasses
-
-
-class _Missing:
-    def __repr__(self):
-        return "< 'MISSING' >"
-
-
-MISSING = _Missing()
-
-
-def get_attr(t, name, default=MISSING):
-    value = t.__dict__.get(name, default)
-    if value is not get_attr:
-        if hasattr(value, '__get__') and type(value) in {staticmethod, classmethod}:
-            return getattr(t, name, get_attr)
-        else:
-            return value
-    return getattr(t, name, get_attr)
-
-
-def del_attr(t, name):
-    old = get_attr(t, name, MISSING)
-    if old is not MISSING:
-        delattr(t, name)
-    return old
-
-
-def set_attr(t, name, value):
-    old = get_attr(t, name)
-    if isinstance(t.__dict__, MutableMapping):
-        t.__dict__[name] = value
-    else:
-        setattr(t, name, value)
-    return old
-
-
-class PatchMeta(type):
-    __enabled__: bool
-
-    def __prepare__(cls, *args, **kwargs):
-        return type.__prepare__(*args, **kwargs)
-
-    def __new__(mcs, name, bases, namespace):
-        type_to_patch = namespace.pop('__target__', None)
-        if type_to_patch is None:
-            return type.__new__(mcs, name, bases, {})
-
-        to_delete = namespace.pop('__to_delete__', set())
-        to_update = namespace.pop('__to_update__', set())
-
-        patched_attrs = {
-            attr: namespace[attr]
-            for attr in to_update
-
-        }
-        original_attrs = {
-            attr: type_to_patch.__dict__[attr]
-            for attr in to_update | to_delete
-            if attr in type_to_patch.__dict__
-        }
-        cls = type.__new__(mcs, name, bases, {})
-
-        cls.__target__ = type_to_patch
-        cls.__attrs_to_patch__ = patched_attrs
-        cls.__original_attrs__ = original_attrs
-        cls.__extra__ = (to_update | to_delete) ^ original_attrs.keys()
-        cls.__attrs_to_delete__ = to_delete
-        cls.__redefined_on_subclasses__ = {}
-        cls.__enabled__ = False
-        return cls
-
-    def enable(cls):
-        target = cls.__target__
-        subclasses = _get_all_subclasses(target)
-
-        for attr in cls.__attrs_to_delete__:
-            old_value = del_attr(target, attr)
-            if old_value is MISSING:
-                continue
-            for sub_cls in subclasses:
-                if get_attr(sub_cls, attr) is old_value:
-                    del_attr(sub_cls, attr)
-                    cls.__redefined_on_subclasses__.setdefault(attr, set()).add(sub_cls)
-
-        for attr, new_value in cls.__attrs_to_patch__.items():
-            old_value = set_attr(target, attr, new_value)
-            if old_value is MISSING:
-                continue
-            cls.__original_attrs__[attr] = old_value
-            for sub_cls in subclasses:
-                if get_attr(sub_cls, attr) is old_value:
-                    set_attr(sub_cls, attr, new_value)
-                    cls.__redefined_on_subclasses__.setdefault(attr, set()).add(sub_cls)
-
-        cls.__enabled__ = True
-
-    def disable(cls):
-        target = cls.__target__
-        for attr, value in cls.__original_attrs__.items():
-            set_attr(target, attr, value)
-            for sub_cls in cls.__redefined_on_subclasses__.get(attr, ()):
-                set_attr(sub_cls, attr, value)
-
-        for attr in cls.__extra__:
-            del_attr(target, attr)
-
-        cls.__enabled__ = False
-
-
-class Patch(metaclass=PatchMeta):
-    ...
-
-
-class PatchedEnumMeta(Patch):
-    __target__ = EnumMeta
-    __to_delete__ = {'__getattr__'}
-    __to_update__ = {'__new__', '__iter__'}
-
+class EnumMetaPatch(
+    Patch, target=EnumMeta, delete={'__getattr__'}, update={'__new__', '__iter__'}
+):
     def __new__(mcs, cls_name, bases, namespace):
         # an Enum class is final once enumeration items have been defined; it
         # cannot be mixed with other types (int, float, etc.) if it has an
@@ -269,11 +143,9 @@ class PatchedEnumMeta(Patch):
         return iter(cls._unique_members_.values())
 
 
-class PatchedEnum(Patch):
-    __target__ = Enum
-    __to_delete__ = {'name', 'value'}
-    __to_update__ = {'__new__', '__setattr__', '__delattr__'}
-
+class EnumPatch(
+    Patch, target=Enum, delete={'name', 'value'}, update={'__new__', '__setattr__', '__delattr__'}
+):
     def __new__(cls, value):
         """
         All enum instances are actually created during class construction
@@ -344,39 +216,3 @@ def _decompose(flag, value):
         # we have the breakdown, don't need the value member itself
         members.pop(0)
     return members, not_covered
-
-
-def _enable():
-    """
-    Patches enum for best performance
-
-    :param reload_modules: whether to reload modules after patch or not
-    :param exclude_modules: set of modules which will not be reloaded
-    :param frame_to_check: frame globals of which will be checked for imported enums (set 0 to skip check)
-    """
-    patch: PatchMeta
-    for patch in Patch.__subclasses__():
-        patch.enable()
-
-    # setting missing attributes to enum types and members that were created before patch
-    for enum_cls in _get_all_subclasses(Enum):
-        unique_members = set(enum_cls._member_names_)
-        type.__setattr__(
-            enum_cls,
-            '_unique_members_',
-            {k: v for k, v in enum_cls._member_map_.items() if k in unique_members}
-        )
-        # e._value2member_map_ can have extra members so prefer it,
-        # but it also can be empty if values are unhashable
-        for member in (enum_cls._value2member_map_ or enum_cls._member_map_).values():
-            object.__setattr__(member, 'name', member._name_)
-            object.__setattr__(member, 'value', member._value_)
-
-
-def _disable():
-    """
-    Opposite of enable()
-    """
-    patch: PatchMeta
-    for patch in Patch.__subclasses__():
-        patch.disable()
