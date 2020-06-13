@@ -1,7 +1,5 @@
-import enum
-
-from .parcher import _get_all_subclasses, Patch, PatchMeta
-from .patches import EnumMetaPatch, EnumPatch, DynamicClassAttributePatch, EnumDictPatch
+from . import patches  # just to execute module
+from .parcher import Patch, PatchMeta, InstancePatch
 
 __all__ = (
     'disable',
@@ -9,12 +7,10 @@ __all__ = (
     'enabled',
 )
 
-enabled = False
-
-orig_decompose = enum._decompose
+enabled: bool = False
 
 
-def enable():
+def enable() -> None:
     """
     Patches enum for best performance
     """
@@ -22,14 +18,12 @@ def enable():
     if enabled:
         raise RuntimeError('Nothing to enable: patch is already applied')
 
-    patch: PatchMeta
-    for patch in Patch.__subclasses__():
-        patch.enable()
-    enum._decompose = patches._decompose
+    Patch.enable_patches()
+    InstancePatch.enable_patches()
     enabled = True
 
 
-def disable():
+def disable() -> None:
     """
     Restores enum to its origin state
     """
@@ -37,10 +31,8 @@ def disable():
     if not enabled:
         raise RuntimeError('Nothing to disable: patch was not applied')
 
-    patch: PatchMeta
-    for patch in Patch.__subclasses__():
-        patch.disable()
-    enum._decompose = orig_decompose
+    Patch.disable_patches()
+    InstancePatch.disable_patches()
     enabled = False
 
 

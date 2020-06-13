@@ -1,37 +1,19 @@
-from enum import EnumMeta, _make_class_unpicklable, Enum, _high_bit, _EnumDict, _is_sunder, _is_dunder, _is_descriptor, \
-    auto, _auto_null
+import enum
+from enum import (
+    Enum,
+    EnumMeta,
+    _EnumDict,
+    auto,
+    _auto_null,
+    _high_bit,
+    _is_descriptor,
+    _is_dunder,
+    _is_sunder,
+    _make_class_unpicklable,
+)
 from types import DynamicClassAttribute
 
-from fastenum.parcher import Patch
-
-
-# faster _decompose version from python 3.9
-def _decompose(flag, value):
-    """Extract all members from the value."""
-    # _decompose is only called if the value is not named
-    not_covered = value
-    negative = value < 0
-    members = []
-    for member in flag:
-        member_value = member._value_
-        if member_value and member_value & value == member_value:
-            members.append(member)
-            not_covered &= ~member_value
-    if not negative:
-        tmp = not_covered
-        while tmp:
-            flag_value = 2 ** _high_bit(tmp)
-            if flag_value in flag._value2member_map_:
-                members.append(flag._value2member_map_[flag_value])
-                not_covered &= ~flag_value
-            tmp &= ~flag_value
-    if not members and value in flag._value2member_map_:
-        members.append(flag._value2member_map_[value])
-    members.sort(key=lambda m: m._value_, reverse=True)
-    if len(members) > 1 and members[0].value == value:
-        # we have the breakdown, don't need the value member itself
-        members.pop(0)
-    return members, not_covered
+from fastenum.parcher import Patch, InstancePatch
 
 
 class DynamicClassAttributePatch(
@@ -400,3 +382,35 @@ class EnumMetaPatch(
 
     def __reversed__(cls):
         return reversed(list(cls._unique_member_map_.values()))
+
+
+# faster _decompose version from python 3.9
+def _decompose(flag, value):
+    """Extract all members from the value."""
+    # _decompose is only called if the value is not named
+    not_covered = value
+    negative = value < 0
+    members = []
+    for member in flag:
+        member_value = member._value_
+        if member_value and member_value & value == member_value:
+            members.append(member)
+            not_covered &= ~member_value
+    if not negative:
+        tmp = not_covered
+        while tmp:
+            flag_value = 2 ** _high_bit(tmp)
+            if flag_value in flag._value2member_map_:
+                members.append(flag._value2member_map_[flag_value])
+                not_covered &= ~flag_value
+            tmp &= ~flag_value
+    if not members and value in flag._value2member_map_:
+        members.append(flag._value2member_map_[value])
+    members.sort(key=lambda m: m._value_, reverse=True)
+    if len(members) > 1 and members[0].value == value:
+        # we have the breakdown, don't need the value member itself
+        members.pop(0)
+    return members, not_covered
+
+
+InstancePatch.new(target=enum, update={'_decompose': _decompose})
