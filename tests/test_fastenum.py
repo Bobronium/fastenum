@@ -5,7 +5,7 @@ from enum import Enum, EnumMeta, Flag
 import pytest
 
 import fastenum
-from fastenum import EnumPatch, EnumMetaPatch
+from fastenum.patches import EnumPatch, EnumMetaPatch
 
 assert fastenum.enabled
 
@@ -73,7 +73,7 @@ def test_attrs_set():
     assert Foo.a.value == 42
 
 
-@pytest.mark.parametrize('python', ('python3.6', 'python3.7', 'python3.8'))
+@pytest.mark.parametrize('python', (sys.executable, 'python3.6', 'python3.7', 'python3.8'))
 def test_builtin_tests(python):
     try:
         print(f'\nRunning {python} tests', file=sys.stderr)

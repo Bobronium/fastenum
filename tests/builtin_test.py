@@ -1,3 +1,8 @@
+"""
+Run builtin python tests with some needed changes after patch enabled,
+then run it once again after patch disabled to make sure nothing breaks
+"""
+
 import sys
 import unittest
 from test import test_enum, test_re, test_inspect, test_dynamicclassattribute
@@ -147,7 +152,7 @@ orig_test_inspect_classify_class_attrs = test_enum.TestStdLib.test_inspect_class
 orig_expected_help_output_with_docs = test_enum.expected_help_output_with_docs
 
 if __name__ == '__main__':
-    # run_tests()  # if tests fail here only if something was wrong before patch
+    # run_tests()  # tests will fail here only if something was wrong before patch
     import fastenum
     assert fastenum.enabled
 
