@@ -1,0 +1,37 @@
+[tool.poetry]
+name = "f-enum"
+packages = [
+    {include = "fastenum"}
+]
+version = "0.1.0"
+description = "Patch for builtin enum module to achieve best performance"
+authors = ["Bobronium <appkiller16@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+classifiers = [
+    'Intended Audience :: Developers',
+    'License :: OSI Approved :: MIT License',
+    'Programming Language :: Python :: 3.6',
+    'Programming Language :: Python :: 3.7',
+    'Programming Language :: Python :: 3.8',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python',
+    'Topic :: Software Development :: Libraries :: Python Modules'
+]
+
+[tool.poetry.urls]
+"Repository" = "https://github.com/Bobronium/fastenum"
+
+
+[tool.poetry.dependencies]
+python = ">=3.6.2<3.9"
+
+[tool.poetry.dev-dependencies]
+pytest = "*"
+black = "*"
+mypy = "*"
+flake8 = "*"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
