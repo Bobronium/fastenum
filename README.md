@@ -1,33 +1,48 @@
 # fastenum
-#### Patch for builtin `enum` module to achieve best performance
 
-This patch is based on
-[python/cpython#17669](https://github.com/python/cpython/pull/17669) and [python/cpython#16483](https://github.com/python/cpython/pull/16483) 
+###### Based on [python/cpython#17669](https://github.com/python/cpython/pull/17669) and [python/cpython#16483](https://github.com/python/cpython/pull/16483)
 
-### Why?
-- ~100x faster new `Flags` and `IntFlags` creation
+Patch for stdlib `enum` that makes it *fast*.
+
+## How fast?
+
 - ~10x faster `name`/`value` access
 - ~6x faster access to enum members
 - ~2x faster values positive check
 - ~3x faster values negative check
 - ~3x faster iteration
+- ~100x faster new `Flags` and `IntFlags` creation for Python 3.8 and below
 
+## Wow this is fast! How do I use it?
 
-### Wow it's fast! How I do use it?
-To enable patch, just import fastenum once:
+First, install it from PyPi using pip
+
+```shell
+pip install f-enum
+```
+
+or using poetry
+
+```shell
+poetry add f-enum
+```
+
+Then enable the patch just by calling `fastenum.enable()` once at the start of your programm:
+
 ```python
 import fastenum
 
-assert fastenum.enabled
+fastenum.enable()
 ```
-After you imported fastenum package, all your Enums are patched and fast!
 
-You don't need to re-apply patch across different modules: once it's patched it'll work everywhere.
+You don't need to re-apply patch across different modules: once it's enabled, it'll work everywhere.
 
+## What's changed?
 
-### What's changed?
-All changes are backwards compatible, so you should be ok with any of your existing code. 
-But of course, always test first!
+fastenum is designed to give effortless boost for all enums from stdlib. That means that none of optimizations should break existing code, thus requiring no changes other than installing and activating the library.
+
+Here are summary of internal changes:
+
 - Optimized `Enum.__new__`
 - Remove `EnumMeta.__getattr__`
 - Store `Enum.name` and `.value` in members `__dict__` for faster access
