@@ -86,8 +86,9 @@ class EnumPatch(
         try:
             result = cls._missing_(value)
         except Exception as e:
-            # Huge boost for standard enum
             if cls._missing_ is Enum._missing_:
+                # assuming Enum._missing_ is always raises exception
+                # This gives huge boost for standard enum
                 raise
             else:
                 e.__context__ = ValueError("%r is not a valid %s" % (value, cls.__qualname__))
@@ -98,14 +99,20 @@ class EnumPatch(
 
         ve_exc = ValueError("%r is not a valid %s" % (value, cls.__qualname__))
         if result is None:
-            raise ve_exc
+            try:
+                raise ve_exc
+            finally:
+                ve_exc = None
         else:
             exc = TypeError(
                 'error in %s._missing_: returned %r instead of None or a valid member'
                 % (cls.__name__, result)
             )
             exc.__context__ = ve_exc
-            raise exc
+            try:
+                raise exc
+            finally:
+                exc = None
 
     def __dir__(self):
         added_behavior = [
@@ -113,7 +120,7 @@ class EnumPatch(
             for cls in self.__class__.mro()
             for m in cls.__dict__
             if m[0] != '_' and m not in self._member_map_
-        ]
+        ] + [m for m in self.__dict__ if m[0] != '_']
         return ['__class__', '__doc__', '__module__', 'name', 'value'] + added_behavior
 
     def __setattr__(self, key, value):
@@ -164,10 +171,12 @@ class EnumPatch(
 class EnumDictPatch(
     Patch, target=_EnumDict, update={'__init__', '__setitem__', '_member_names', '_last_values'}
 ):
+
     def __init__(self):
         dict.__init__(self)
         self.members = {}
         self._ignore = []
+        self._auto_called = False
 
     def __setitem__(self, key, value):
         """Changes anything not dundered or not a descriptor.
@@ -179,12 +188,22 @@ class EnumDictPatch(
 
         """
         if _is_sunder(key):
+            import warnings
+            warnings.warn(
+                    "private variables, such as %r, will be normal attributes in 3.10"
+                        % (key, ),
+                    DeprecationWarning,
+                    stacklevel=2,
+                    )
             if key not in {
                 '_order_', '_create_pseudo_member_',
                 '_generate_next_value_', '_missing_', '_ignore_',
             }:
                 raise ValueError('_names_ are reserved for future Enum use')
             if key == '_generate_next_value_':
+                # check if members already defined as auto()
+                if self._auto_called:
+                    raise TypeError("_generate_next_value_ must be defined before members")
                 setattr(self, '_generate_next_value', value)
             elif key == '_ignore_':
                 if isinstance(value, str):
@@ -210,6 +229,7 @@ class EnumDictPatch(
             if isinstance(value, auto):
                 if value.value == _auto_null:
                     value.value = self._generate_next_value(key, 1, len(self.members), list(self.members.values()))
+                    self._auto_called = True
                 value = value.value
             self.members[key] = value
         dict.__setitem__(self, key, value)
@@ -238,7 +258,7 @@ class EnumMetaPatch(
         ignore = classdict['_ignore_']
         for key in ignore:
             classdict.pop(key, None)
-        member_type, first_enum = metacls._get_mixins_(bases)
+        member_type, first_enum = metacls._get_mixins_(cls, bases)
         __new__, save_new, use_args = metacls._find_new_(classdict, member_type,
                                                          first_enum)
 
@@ -290,7 +310,32 @@ class EnumMetaPatch(
                 methods = {'__getnewargs_ex__', '__getnewargs__',
                            '__reduce_ex__', '__reduce__'}
                 if not any(m in member_type.__dict__ for m in methods):
-                    _make_class_unpicklable(enum_class)
+                    if '__new__' in classdict:
+                        # too late, sabotage
+                        _make_class_unpicklable(enum_class)
+                    else:
+                        # final attempt to verify that pickling would work:
+                        # travel mro until __new__ is found, checking for
+                        # __reduce__ and friends along the way -- if any of them
+                        # are found before/when __new__ is found, pickling should
+                        # work
+                        sabotage = None
+                        for chain in bases:
+                            for base in chain.__mro__:
+                                if base is object:
+                                    continue
+                                elif any(m in base.__dict__ for m in methods):
+                                    # found one, we're good
+                                    sabotage = False
+                                    break
+                                elif '__new__' in base.__dict__:
+                                    # not good
+                                    sabotage = True
+                                    break
+                            if sabotage is not None:
+                                break
+                        if sabotage:
+                            _make_class_unpicklable(enum_class)
 
         # instantiate them, checking for duplicates as we go
         # we instantiate first instead of checking for duplicates first in case
@@ -352,7 +397,9 @@ class EnumMetaPatch(
 
         # double check that repr and friends are not the mixin's or various
         # things break (such as pickle)
-        for name in {'__repr__', '__str__', '__format__', '__reduce_ex__'}:
+        for name in ('__repr__', '__str__', '__format__', '__reduce_ex__'):
+            if name in classdict:
+                continue
             class_method = getattr(enum_class, name)
             obj_method = getattr(member_type, name, None)
             enum_method = getattr(first_enum, name, None)

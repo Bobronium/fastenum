@@ -1,3 +1,4 @@
+from pathlib import Path
 import subprocess
 import sys
 from enum import Enum, EnumMeta, Flag
@@ -73,11 +74,11 @@ def test_attrs_set():
     assert Foo.a.value == 42
 
 
-@pytest.mark.parametrize('python', (sys.executable, 'python3.6', 'python3.7', 'python3.8'))
+@pytest.mark.parametrize('python', (sys.executable,))
 def test_builtin_tests(python):
     try:
         print(f'\nRunning {python} tests', file=sys.stderr)
-        result = subprocess.run([python, f'builtin_test.py'])
+        result = subprocess.run([python, str(Path(__file__).parent / f'builtin_test.py')])
     except FileNotFoundError as e:
         return pytest.skip(f'Unable to run test with {python}, {str(e)}')
 
