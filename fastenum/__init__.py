@@ -1,5 +1,7 @@
-from . import patches  # just to execute module
-from .parcher import Patch, PatchMeta, InstancePatch
+from fastenum import patches  # just to execute module
+from fastenum.parcher import Patch, InstancePatch
+
+assert patches, "Need to load this module"
 
 __all__ = (
     'disable',
@@ -18,6 +20,7 @@ def enable() -> None:
     if enabled:
         raise RuntimeError('Nothing to enable: patch is already applied')
 
+
     Patch.enable_patches()
     InstancePatch.enable_patches()
     enabled = True
@@ -29,11 +32,8 @@ def disable() -> None:
     """
     global enabled
     if not enabled:
-        raise RuntimeError('Nothing to disable: patch was not applied')
+        raise RuntimeError('Nothing to disable: patch was not applied previously')
 
     Patch.disable_patches()
     InstancePatch.disable_patches()
     enabled = False
-
-
-enable()
