@@ -1,5 +1,6 @@
+from __future__ import annotations
 import gc
-from typing import MutableMapping, Any, AbstractSet, Type, Callable, Dict, Tuple, Mapping, Optional, Iterable, Set
+from typing import MutableMapping, Any, AbstractSet, Type, Callable, Dict, Tuple, Mapping, Optional, Set, cast
 
 
 class _Missing:
@@ -38,10 +39,17 @@ def set_attr(t: Any, name: str, value: Any) -> Any:
 
 class PatchMeta(type):
     __enabled__: bool
-    __run_on_class__: Callable[[Type[Any]], None]
-    __run_on_instance__: Callable[[Any], None]
+    __run_on_class__: classmethod
+    __run_on_instance__: classmethod
 
-    def __prepare__(cls, *args: Any, **kwargs: Any) -> Mapping[str, Any]:
+    __target__: Type[Any]
+    __to_update__: dict[str, Any]
+    __to_delete__: AbstractSet[str]
+    __original_attrs__: dict[Any, Any]
+    __extra__: AbstractSet[str]
+    __redefined_on_subclasses__: dict[str, Any]
+
+    def __prepare__(cls, *args: Any, **kwargs: Any) -> Mapping[str, Any]:  # type: ignore
         return type.__prepare__(*args, **kwargs)
 
     def __new__(
@@ -52,19 +60,19 @@ class PatchMeta(type):
             target: Any = None,
             delete: AbstractSet[str] = None,
             update: AbstractSet[str] = None
-    ) -> "PatchMeta":
+    ) -> PatchMeta:
         target = target or namespace.pop('__target__', None)
         if target is None:
             return type.__new__(mcs, name, bases, namespace)
 
-        to_delete = delete or namespace.pop('__to_delete__', set())
-        to_update = update or namespace.pop('__to_update__', set())
+        to_delete = cast(set, delete or namespace.pop('__to_delete__', set()))
+        to_update = cast(set, update or namespace.pop('__to_update__', set()))
 
         patched_attrs = {
             attr: namespace[attr]
             for attr in to_update
-
         }
+        
         original_attrs = {
             attr: target.__dict__[attr]
             for attr in to_update | to_delete
@@ -164,15 +172,10 @@ class PatchMeta(type):
 
 class Patch(metaclass=PatchMeta):
     """Class to declare attributes to patch other classes"""
-
-    __target__: Type[Any]
-    __to_update__: AbstractSet[str]
-    __to_delete__: AbstractSet[str]
-
     __enabled__: bool = False
 
-    __run_on_class__: Callable[[Type[Any]], None] = None
-    __run_on_instance__: Callable[[Any], None] = None
+    __run_on_class__: Callable[[Type[Any]], None] | None = None
+    __run_on_instance__: Callable[[Any], None] | None = None
 
 
 class InstancePatchMeta(PatchMeta):
@@ -181,18 +184,18 @@ class InstancePatchMeta(PatchMeta):
 
     def new(
             cls, target: Any, delete: AbstractSet[str] = None, update: Dict[str, Any] = None
-    ) -> "InstancePatchMeta":
-        return cls.__class__.__new__(
-            cls.__class__,
-            getattr(target, '__name__', target.__class__.__name__) + 'Patch',
-            (cls,),
-            update,
+    ) -> InstancePatchMeta:
+        return cast(InstancePatchMeta, cls.__class__.__new__(
+            mcs=cls.__class__,
+            name=getattr(target, '__name__', target.__class__.__name__) + 'Patch',
+            bases=(cls,),
+            namespace=update or {},
             target=target,
             delete=delete,
-            update=update.keys(),
-        )
+            update=update.keys() if update else None,
+        ))
 
 
 class InstancePatch(metaclass=InstancePatchMeta):
-    __run_on_class__: Callable[[Type[Any]], None] = None
-    __run_on_instance__: Callable[[Any], None] = None
+    __run_on_class__ = None
+    __run_on_instance__ = None

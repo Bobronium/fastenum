@@ -1,5 +1,5 @@
 import enum
-from enum import (
+from enum import ( # type: ignore
     Enum,
     EnumMeta,
     _EnumDict,
@@ -137,12 +137,12 @@ class EnumPatch(
         object.__delattr__(self, key)
 
     @classmethod
-    def __run_on_class__(cls, enum_cls: EnumMeta):
+    def __run_on_class__(cls, enum_cls: EnumMeta):  # type: ignore
         cls._set_names(enum_cls)
         cls._set_dynamic_class_attrs(enum_cls)
 
     @classmethod
-    def __run_on_instance__(cls, member: Enum):
+    def __run_on_instance__(cls, member: Enum):  # type: ignore
         member.__dict__['name'] = member._name_
         member.__dict__['value'] = member._value_
 
