@@ -376,11 +376,13 @@ class EnumMetaPatch(
                 enum_class._unique_member_map_[member_name] = enum_member
                 enum_class._member_names_.append(member_name)
 
-            dynamic_attr = dynamic_attributes.get(member_name)
+            dynamic_attr: DynamicClassAttributePatch = dynamic_attributes.get(member_name)
             if dynamic_attr is not None:
                 # Setting attrs respectively to dynamic attribute so access member_name
                 # through a class will be routed to enum_member
                 # setattr(enum_class, dynamic_attr.class_attr_name, enum_member)
+                # name and value dynamic attrs are deleted from EnumMeta and shouldn't fall in this condition at this point
+                # this is just a way to support any user defined dynamic class attrs
                 dynamic_attr.set_class_attr(enum_class, enum_member)
             else:
                 setattr(enum_class, member_name, enum_member)
